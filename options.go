@@ -59,6 +59,15 @@ func WithMetrics(mc MetricsCollector) Option {
 	}
 }
 
+// WithTracer sets the tracer for distributed tracing. Default: NoopTracer.
+func WithTracer(t Tracer) Option {
+	return func(c *Consumer) {
+		if t != nil {
+			c.tracer = t
+		}
+	}
+}
+
 // WithLogger sets the structured logger. Default: slog.Default().
 func WithLogger(l *slog.Logger) Option {
 	return func(c *Consumer) {

@@ -17,6 +17,7 @@ type Consumer struct {
 	acknowledger  Acknowledger
 	errorResolver ErrorResolver
 	metrics       MetricsCollector
+	tracer        Tracer
 	logger        *slog.Logger
 
 	workers         int
@@ -33,6 +34,7 @@ func New(receiver Receiver, handler Handler, acknowledger Acknowledger, opts ...
 		acknowledger:    acknowledger,
 		errorResolver:   &DefaultErrorResolver{},
 		metrics:         &NoopMetrics{},
+		tracer:          &NoopTracer{},
 		logger:          slog.Default(),
 		workers:         5,
 		shutdownTimeout: 30 * time.Second,
@@ -118,11 +120,13 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg *Message) {
+	ctx, endSpan := c.tracer.Start(ctx, msg)
 	start := time.Now()
 
 	err := c.handler.Handle(ctx, msg)
 	duration := time.Since(start)
 	c.metrics.ObserveProcessingDuration(duration)
+	endSpan(err)
 
 	if err == nil {
 		if ackErr := c.acknowledger.Ack(ctx, msg); ackErr != nil {
