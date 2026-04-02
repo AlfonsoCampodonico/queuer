@@ -408,3 +408,70 @@ func TestNew_NilAcknowledger_Panics(t *testing.T) {
 	recv := newMockReceiver(nil)
 	queuer.New(recv, queuer.HandlerFunc(func(_ context.Context, _ *queuer.Message) error { return nil }), nil)
 }
+
+type callbackErrorResolver struct {
+	fn func(context.Context, *queuer.Message, error) (queuer.ErrorAction, error)
+}
+
+func (r *callbackErrorResolver) Resolve(ctx context.Context, msg *queuer.Message, err error) (queuer.ErrorAction, error) {
+	return r.fn(ctx, msg, err)
+}
+
+func TestConsumer_PanicRecovery(t *testing.T) {
+	msgs := []*queuer.Message{
+		{ID: "msg-panic", Body: "boom"},
+		{ID: "msg-ok", Body: "fine"},
+	}
+
+	var processed atomic.Int64
+	handler := queuer.HandlerFunc(func(_ context.Context, msg *queuer.Message) error {
+		if msg.Body == "boom" {
+			panic("handler exploded")
+		}
+		processed.Add(1)
+		return nil
+	})
+
+	recv := newMockReceiver(msgs)
+	ack := &mockAcknowledger{}
+
+	var resolvedErr atomic.Value
+	resolver := &callbackErrorResolver{fn: func(_ context.Context, _ *queuer.Message, err error) (queuer.ErrorAction, error) {
+		resolvedErr.Store(err)
+		return queuer.Skip, nil
+	}}
+
+	c := queuer.New(recv, handler, ack,
+		queuer.WithWorkers(1),
+		queuer.WithErrorResolver(resolver),
+		queuer.WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-recv.returned
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	err := c.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stored := resolvedErr.Load()
+	if stored == nil {
+		t.Fatal("expected error resolver to be called with panic error")
+	}
+	var pe *queuer.PanicError
+	if !errors.As(stored.(error), &pe) {
+		t.Fatalf("expected PanicError, got %T: %v", stored, stored)
+	}
+	if pe.Value != "handler exploded" {
+		t.Errorf("panic value = %v, want %q", pe.Value, "handler exploded")
+	}
+
+	if got := processed.Load(); got != 1 {
+		t.Errorf("processed = %d, want 1", got)
+	}
+}
