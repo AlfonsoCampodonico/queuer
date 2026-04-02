@@ -307,3 +307,75 @@ func TestConsumer_GracefulShutdown_TimeoutExceeded(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// --- Integration test ---
+
+type trackingMetrics struct {
+	received  atomic.Int64
+	processed atomic.Int64
+	failed    atomic.Int64
+}
+
+func (m *trackingMetrics) IncMessagesReceived(count int) { m.received.Add(int64(count)) }
+func (m *trackingMetrics) IncMessagesProcessed()         { m.processed.Add(1) }
+func (m *trackingMetrics) IncMessagesFailed(_ queuer.ErrorAction) {
+	m.failed.Add(1)
+}
+func (m *trackingMetrics) ObserveProcessingDuration(_ time.Duration) {}
+func (m *trackingMetrics) SetActiveWorkers(_ int)                    {}
+
+func TestConsumer_Integration(t *testing.T) {
+	msgs := []*queuer.Message{
+		{ID: "1", Body: "ok", ReceiptHandle: "r1"},
+		{ID: "2", Body: "fail", ReceiptHandle: "r2"},
+		{ID: "3", Body: "ok", ReceiptHandle: "r3"},
+	}
+
+	recv := newMockReceiver(msgs)
+	ack := &mockAcknowledger{}
+	metrics := &trackingMetrics{}
+
+	handler := queuer.HandlerFunc(func(_ context.Context, msg *queuer.Message) error {
+		if msg.Body == "fail" {
+			return errors.New("bad message")
+		}
+		return nil
+	})
+
+	resolver := &mockErrorResolver{action: queuer.Skip}
+
+	c := queuer.New(recv, handler, ack,
+		queuer.WithWorkers(3),
+		queuer.WithErrorResolver(resolver),
+		queuer.WithMetrics(metrics),
+		queuer.WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-recv.returned
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := c.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := metrics.received.Load(); got < 3 {
+		t.Errorf("received = %d, want >= 3", got)
+	}
+	if got := metrics.processed.Load(); got != 2 {
+		t.Errorf("processed = %d, want 2", got)
+	}
+	if got := metrics.failed.Load(); got != 1 {
+		t.Errorf("failed = %d, want 1", got)
+	}
+
+	// "fail" message was Skip'd (acked), so all 3 should be acked
+	ackedIDs := ack.ackedIDs()
+	if len(ackedIDs) != 3 {
+		t.Errorf("total acked = %d, want 3 (2 success + 1 skip), got %v", len(ackedIDs), ackedIDs)
+	}
+}
