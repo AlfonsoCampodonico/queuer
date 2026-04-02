@@ -27,6 +27,15 @@ type Consumer struct {
 
 // New creates a Consumer with the given interfaces and options.
 func New(receiver Receiver, handler Handler, acknowledger Acknowledger, opts ...Option) *Consumer {
+	if receiver == nil {
+		panic("queuer: receiver must not be nil")
+	}
+	if handler == nil {
+		panic("queuer: handler must not be nil")
+	}
+	if acknowledger == nil {
+		panic("queuer: acknowledger must not be nil")
+	}
 	c := &Consumer{
 		receiver:        receiver,
 		handler:         handler,
