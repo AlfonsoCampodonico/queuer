@@ -3,6 +3,7 @@ package queuer
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,7 +132,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg *Message) {
 	ctx, endSpan := c.tracer.Start(ctx, msg)
 	start := time.Now()
 
-	err := c.handler.Handle(ctx, msg)
+	err := c.safeHandle(ctx, msg)
 	duration := time.Since(start)
 	c.metrics.ObserveProcessingDuration(duration)
 	endSpan(err)
@@ -157,6 +158,18 @@ func (c *Consumer) processMessage(ctx context.Context, msg *Message) {
 
 	c.metrics.IncMessagesFailed(action)
 	c.executeErrorAction(ctx, msg, action)
+}
+
+func (c *Consumer) safeHandle(ctx context.Context, msg *Message) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			err = &PanicError{Value: r, Stack: buf[:n]}
+			c.logger.Error("handler panicked", "message_id", msg.ID, "panic", r, "stack", string(buf[:n]))
+		}
+	}()
+	return c.handler.Handle(ctx, msg)
 }
 
 func (c *Consumer) executeErrorAction(ctx context.Context, msg *Message, action ErrorAction) {
