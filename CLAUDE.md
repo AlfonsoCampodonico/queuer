@@ -11,6 +11,7 @@ go test ./... -v -timeout 30s           # Verbose test output
 go test -run TestConsumer_Integration   # Run a single test by name
 go test ./sqs/... -v                    # Run tests for a specific package
 go test ./otel/... -v
+golangci-lint run ./...                 # Run linter
 ```
 
 ## Architecture

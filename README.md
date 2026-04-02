@@ -1,5 +1,7 @@
 # queuer
 
+[![CI](https://github.com/AlfonsoCampodonico/queuer/actions/workflows/ci.yml/badge.svg)](https://github.com/AlfonsoCampodonico/queuer/actions/workflows/ci.yml)
+
 A Go library for consuming messages from AWS SQS queues. Interface-heavy design with pluggable implementations for maximum flexibility and testability.
 
 ## Install
