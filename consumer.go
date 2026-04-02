@@ -65,6 +65,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	var activeWorkers atomic.Int64
 
+	processingCtx, cancelProcessing := context.WithCancel(context.Background())
+	defer cancelProcessing()
+
 	// Start worker goroutines.
 	for i := 0; i < c.workers; i++ {
 		wg.Add(1)
@@ -73,7 +76,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			for msg := range msgCh {
 				active := activeWorkers.Add(1)
 				c.metrics.SetActiveWorkers(int(active))
-				c.processMessage(ctx, msg)
+				c.processMessage(processingCtx, msg)
 				active = activeWorkers.Add(-1)
 				c.metrics.SetActiveWorkers(int(active))
 			}
@@ -132,6 +135,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		c.logger.Info("consumer stopped, all messages drained")
 		return nil
 	case <-time.After(c.shutdownTimeout):
+		cancelProcessing()
 		c.logger.Warn("shutdown timeout exceeded, some messages may not have been processed")
 		return ErrShutdownTimeout
 	}

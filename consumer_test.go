@@ -528,3 +528,48 @@ func TestConsumer_ReceiveBackoff(t *testing.T) {
 		t.Errorf("second backoff gap (%v) should be >= first (%v)", gap2, gap1)
 	}
 }
+
+func TestConsumer_ShutdownContextNotCancelled(t *testing.T) {
+	msgs := []*queuer.Message{
+		{ID: "msg-1", Body: "check-ctx"},
+	}
+
+	var ctxWasCancelled atomic.Bool
+	var handlerDone atomic.Bool
+
+	handler := queuer.HandlerFunc(func(ctx context.Context, _ *queuer.Message) error {
+		time.Sleep(200 * time.Millisecond)
+		if ctx.Err() != nil {
+			ctxWasCancelled.Store(true)
+		}
+		handlerDone.Store(true)
+		return nil
+	})
+
+	recv := newMockReceiver(msgs)
+	ack := &mockAcknowledger{}
+
+	c := queuer.New(recv, handler, ack,
+		queuer.WithWorkers(1),
+		queuer.WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-recv.returned
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := c.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !handlerDone.Load() {
+		t.Fatal("handler did not complete")
+	}
+	if ctxWasCancelled.Load() {
+		t.Fatal("handler context was cancelled during shutdown — it should stay active until shutdown timeout")
+	}
+}
