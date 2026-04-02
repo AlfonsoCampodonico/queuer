@@ -1,6 +1,10 @@
 package queuer
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // ErrorAction tells the consumer what to do after a handler error.
 type ErrorAction int
@@ -41,4 +45,18 @@ type DefaultErrorResolver struct{}
 
 func (d *DefaultErrorResolver) Resolve(_ context.Context, _ *Message, _ error) (ErrorAction, error) {
 	return Retry, nil
+}
+
+// ErrShutdownTimeout is returned by Run when in-flight messages are not
+// drained within the configured shutdown timeout.
+var ErrShutdownTimeout = errors.New("queuer: shutdown timeout exceeded")
+
+// PanicError wraps a value recovered from a handler panic.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("queuer: handler panicked: %v", e.Value)
 }

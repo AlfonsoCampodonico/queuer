@@ -303,8 +303,8 @@ func TestConsumer_GracefulShutdown_TimeoutExceeded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
-	if err.Error() != "queuer: shutdown timeout exceeded" {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, queuer.ErrShutdownTimeout) {
+		t.Fatalf("expected ErrShutdownTimeout, got %v", err)
 	}
 }
 
