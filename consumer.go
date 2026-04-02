@@ -83,6 +83,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 	// Start the polling goroutine.
 	go func() {
 		defer close(msgCh)
+		var consecutiveErrors int
 		for {
 			if ctx.Err() != nil {
 				return
@@ -92,9 +93,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return
 				}
-				c.logger.Warn("receive error", "error", err)
+				consecutiveErrors++
+				backoff := c.receiveBackoff(consecutiveErrors)
+				c.logger.Warn("receive error, backing off", "error", err, "backoff", backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
+			consecutiveErrors = 0
 			c.metrics.IncMessagesReceived(len(msgs))
 			c.logger.Debug("received messages", "count", len(msgs))
 			for _, msg := range msgs {
@@ -158,6 +167,21 @@ func (c *Consumer) processMessage(ctx context.Context, msg *Message) {
 
 	c.metrics.IncMessagesFailed(action)
 	c.executeErrorAction(ctx, msg, action)
+}
+
+func (c *Consumer) receiveBackoff(consecutiveErrors int) time.Duration {
+	const (
+		base = 1 * time.Second
+		max  = 30 * time.Second
+	)
+	d := base
+	for i := 1; i < consecutiveErrors; i++ {
+		d *= 2
+		if d > max {
+			return max
+		}
+	}
+	return d
 }
 
 func (c *Consumer) safeHandle(ctx context.Context, msg *Message) (err error) {

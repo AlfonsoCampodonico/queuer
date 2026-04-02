@@ -475,3 +475,56 @@ func TestConsumer_PanicRecovery(t *testing.T) {
 		t.Errorf("processed = %d, want 1", got)
 	}
 }
+
+type failingReceiver struct {
+	failures  int
+	callTimes []time.Time
+	mu        sync.Mutex
+	failCount int
+}
+
+func (r *failingReceiver) Receive(ctx context.Context, _ int, _ time.Duration) ([]*queuer.Message, error) {
+	r.mu.Lock()
+	r.callTimes = append(r.callTimes, time.Now())
+	r.failCount++
+	count := r.failCount
+	r.mu.Unlock()
+
+	if count <= r.failures {
+		return nil, errors.New("throttled")
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestConsumer_ReceiveBackoff(t *testing.T) {
+	recv := &failingReceiver{failures: 3}
+	ack := &mockAcknowledger{}
+	handler := queuer.HandlerFunc(func(_ context.Context, _ *queuer.Message) error { return nil })
+
+	c := queuer.New(recv, handler, ack,
+		queuer.WithWorkers(1),
+		queuer.WithShutdownTimeout(100*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = c.Run(ctx)
+
+	recv.mu.Lock()
+	defer recv.mu.Unlock()
+
+	if len(recv.callTimes) < 4 {
+		t.Fatalf("expected at least 4 receive calls, got %d", len(recv.callTimes))
+	}
+
+	gap1 := recv.callTimes[1].Sub(recv.callTimes[0])
+	gap2 := recv.callTimes[2].Sub(recv.callTimes[1])
+
+	if gap1 < 800*time.Millisecond {
+		t.Errorf("first backoff gap = %v, want >= 800ms", gap1)
+	}
+	if gap2 < gap1 {
+		t.Errorf("second backoff gap (%v) should be >= first (%v)", gap2, gap1)
+	}
+}
