@@ -35,7 +35,7 @@ func findMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metrics 
 func TestIncMessagesReceived(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestIncMessagesReceived(t *testing.T) {
 func TestIncMessagesProcessed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestIncMessagesProcessed(t *testing.T) {
 func TestIncMessagesFailed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestIncMessagesFailed(t *testing.T) {
 func TestObserveProcessingDuration(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestObserveProcessingDuration(t *testing.T) {
 func TestSetActiveWorkers(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestSetActiveWorkers(t *testing.T) {
 func TestSetActiveWorkersSameValue(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestSetActiveWorkersSameValue(t *testing.T) {
 func TestWithQueueLabel(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider, otelmetrics.WithQueueLabel("https://sqs.us-east-1.amazonaws.com/123456789/my-queue"))
 	if err != nil {
@@ -287,7 +287,7 @@ func TestWithQueueLabel(t *testing.T) {
 func TestWithMeterName(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	defer provider.Shutdown(context.Background())
+	defer func() { _ = provider.Shutdown(context.Background()) }()
 
 	m, err := otelmetrics.NewMetrics(provider, otelmetrics.WithMeterName("custom-meter"))
 	if err != nil {
