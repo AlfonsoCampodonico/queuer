@@ -2,7 +2,6 @@ package queuer
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -115,7 +114,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		return nil
 	case <-time.After(c.shutdownTimeout):
 		c.logger.Warn("shutdown timeout exceeded, some messages may not have been processed")
-		return errors.New("queuer: shutdown timeout exceeded")
+		return ErrShutdownTimeout
 	}
 }
 
