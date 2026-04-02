@@ -379,3 +379,32 @@ func TestConsumer_Integration(t *testing.T) {
 		t.Errorf("total acked = %d, want 3 (2 success + 1 skip), got %v", len(ackedIDs), ackedIDs)
 	}
 }
+
+func TestNew_NilReceiver_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for nil receiver")
+		}
+	}()
+	queuer.New(nil, queuer.HandlerFunc(func(_ context.Context, _ *queuer.Message) error { return nil }), &mockAcknowledger{})
+}
+
+func TestNew_NilHandler_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for nil handler")
+		}
+	}()
+	recv := newMockReceiver(nil)
+	queuer.New(recv, nil, &mockAcknowledger{})
+}
+
+func TestNew_NilAcknowledger_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for nil acknowledger")
+		}
+	}()
+	recv := newMockReceiver(nil)
+	queuer.New(recv, queuer.HandlerFunc(func(_ context.Context, _ *queuer.Message) error { return nil }), nil)
+}
