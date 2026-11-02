@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/", "/sqs", "/otel", "/pubsub"]
+    schedule:
+      interval: weekly
+    groups:
+      aws:
+        patterns: ["github.com/aws/*"]
+      opentelemetry:
+        patterns: ["go.opentelemetry.io/*"]
+      google-cloud:
+        patterns: ["cloud.google.com/*", "google.golang.org/*", "github.com/googleapis/*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

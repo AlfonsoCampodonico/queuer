@@ -11,36 +11,124 @@ permissions:
 
 jobs:
   test:
+    name: test (${{ matrix.module }}, go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ['1.22', 'stable']
+        module: [".", sqs, otel, pubsub]
+        # "min" is the version in the module's go.mod.
+        go: [min, stable]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
+          go-version-file: ${{ matrix.go == 'min' && format('{0}/go.mod', matrix.module) || '' }}
+          cache-dependency-path: "**/go.sum"
+
+      - name: Check go.mod is tidy
+        if: matrix.go == 'stable'
+        run: go mod tidy -diff
 
       - name: Build
         run: go build ./...
 
       - name: Vet
-        run: go vet ./...
+        run: go vet ./... && go vet -tags integration ./...
 
       - name: Test
-        run: go test ./... -race -timeout 60s
+        run: go test ./... -race -timeout 120s -coverprofile=coverage.out -covermode=atomic
 
-  lint:
+      - name: Coverage summary
+        if: matrix.go == 'stable'
+        run: |
+          echo "### Coverage: \`${{ matrix.module }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
     runs-on: ubuntu-latest
+    services:
+      elasticmq:
+        image: softwaremill/elasticmq-native
+        ports: ["9324:9324"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          cache-dependency-path: "**/go.sum"
 
-      - uses: golangci/golangci-lint-action@v6
+      - name: Start Pub/Sub emulator
+        run: |
+          docker run -d --name pubsub -p 8085:8085 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=queuer-test
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8085 >/dev/null && exit 0
+            sleep 2
+          done
+          docker logs pubsub
+          exit 1
+
+      - name: SQS (ElasticMQ)
+        working-directory: sqs
+        env:
+          QUEUER_SQS_ENDPOINT: http://localhost:9324
+        run: go test -tags integration -race -count=1 -timeout 300s ./...
+
+      - name: Pub/Sub (emulator)
+        working-directory: pubsub
+        env:
+          PUBSUB_EMULATOR_HOST: localhost:8085
+        run: go test -tags integration -race -count=1 -timeout 300s ./...
+
+  lint:
+    name: lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [".", sqs, otel, pubsub]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
         with:
-          version: latest
+          go-version: stable
+          cache-dependency-path: "**/go.sum"
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          # Build from source so the linter matches the Go version above.
           install-mode: goinstall
+          working-directory: ${{ matrix.module }}
+          args: --build-tags integration
+
+  vulncheck:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [".", sqs, otel, pubsub]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: "**/go.sum"
+
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

@@ -1,8 +1,10 @@
 name: Release
 
+# Each module is tagged on its own: v0.2.0 for the core module, and
+# sqs/v0.2.0, otel/v0.2.0, pubsub/v0.2.0 for the adapters.
 on:
   push:
-    tags: ['v*']
+    tags: ["v*", "*/v*"]
 
 permissions:
   contents: write
@@ -10,12 +12,19 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [".", sqs, otel, pubsub]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          cache-dependency-path: "**/go.sum"
 
       - name: Build
         run: go build ./...
@@ -24,15 +33,15 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./... -race -timeout 60s
+        run: go test ./... -race -timeout 120s
 
   release:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
