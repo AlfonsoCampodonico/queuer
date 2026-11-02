@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -307,6 +308,40 @@ func TestWithMeterName(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected scope with name 'custom-meter'")
+	}
+}
+
+func TestIncSettleFailedAndAttributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+
+	m, err := otelmetrics.NewMetrics(provider, otelmetrics.WithAttributes(attribute.String("queue", "orders")))
+	if err != nil {
+		t.Fatalf("NewMetrics: %v", err)
+	}
+	m.IncSettleFailed(queuer.SettleAck)
+	m.IncSettleFailed(queuer.SettleAck)
+	m.IncSettleFailed(queuer.SettleExtendLease)
+
+	met := findMetric(collectMetrics(t, reader), "queuer.messages.settle_failed")
+	if met == nil {
+		t.Fatal("metric queuer.messages.settle_failed not found")
+	}
+	sum, ok := met.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("expected Sum[int64], got %T", met.Data)
+	}
+	got := map[string]int64{}
+	for _, dp := range sum.DataPoints {
+		op, _ := dp.Attributes.Value("operation")
+		if q, _ := dp.Attributes.Value("queue"); q.AsString() != "orders" {
+			t.Errorf("queue attribute = %q, want orders", q.AsString())
+		}
+		got[op.AsString()] = dp.Value
+	}
+	if got["ack"] != 2 || got["extend_lease"] != 1 {
+		t.Fatalf("settle failures = %v", got)
 	}
 }
 

@@ -10,13 +10,16 @@ import (
 type ErrorAction int
 
 const (
-	// Retry re-queues the message with a backoff (changes visibility timeout).
+	// Retry hides the message for the duration returned by the retry
+	// backoff (see WithRetryBackoff) and lets it be redelivered afterwards.
 	Retry ErrorAction = iota
-	// Nack sets visibility timeout to 0 for immediate retry.
+	// Nack makes the message available for redelivery immediately.
 	Nack
-	// Skip deletes the message despite the error.
+	// Skip deletes (acknowledges) the message despite the error.
 	Skip
-	// DeadLetter leaves the message in the queue for SQS redrive policy to handle.
+	// DeadLetter leaves the message unsettled so the provider's dead-letter
+	// policy (an SQS redrive policy or a Pub/Sub dead-letter topic) moves it
+	// once its maximum delivery count is reached.
 	DeadLetter
 )
 
@@ -40,9 +43,18 @@ type ErrorResolver interface {
 	Resolve(ctx context.Context, msg *Message, err error) (ErrorAction, error)
 }
 
+// ErrorResolverFunc is an adapter to allow use of ordinary functions as ErrorResolvers.
+type ErrorResolverFunc func(ctx context.Context, msg *Message, err error) (ErrorAction, error)
+
+// Resolve calls f(ctx, msg, err).
+func (f ErrorResolverFunc) Resolve(ctx context.Context, msg *Message, err error) (ErrorAction, error) {
+	return f(ctx, msg, err)
+}
+
 // DefaultErrorResolver returns Retry for all errors.
 type DefaultErrorResolver struct{}
 
+// Resolve always returns Retry.
 func (d *DefaultErrorResolver) Resolve(_ context.Context, _ *Message, _ error) (ErrorAction, error) {
 	return Retry, nil
 }
@@ -50,6 +62,9 @@ func (d *DefaultErrorResolver) Resolve(_ context.Context, _ *Message, _ error) (
 // ErrShutdownTimeout is returned by Run when in-flight messages are not
 // drained within the configured shutdown timeout.
 var ErrShutdownTimeout = errors.New("queuer: shutdown timeout exceeded")
+
+// ErrAlreadyRunning is returned by Run when the consumer is already running.
+var ErrAlreadyRunning = errors.New("queuer: consumer is already running")
 
 // PanicError wraps a value recovered from a handler panic.
 type PanicError struct {

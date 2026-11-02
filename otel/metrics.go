@@ -15,11 +15,13 @@ import (
 type Metrics struct {
 	meterName string
 	queueURL  string
+	extra     []attribute.KeyValue
 	attrs     []attribute.KeyValue
 
 	received  metric.Int64Counter
 	processed metric.Int64Counter
 	failed    metric.Int64Counter
+	settle    metric.Int64Counter
 	duration  metric.Float64Histogram
 	active    metric.Int64UpDownCounter
 
@@ -39,6 +41,7 @@ func NewMetrics(provider metric.MeterProvider, opts ...MetricsOption) (*Metrics,
 	if m.queueURL != "" {
 		m.attrs = append(m.attrs, attribute.String("queue_url", m.queueURL))
 	}
+	m.attrs = append(m.attrs, m.extra...)
 
 	meter := provider.Meter(m.meterName)
 
@@ -52,7 +55,7 @@ func NewMetrics(provider metric.MeterProvider, opts ...MetricsOption) (*Metrics,
 	}
 
 	m.processed, err = meter.Int64Counter("queuer.messages.processed",
-		metric.WithDescription("Total number of messages successfully processed"),
+		metric.WithDescription("Total number of messages successfully processed and acknowledged"),
 	)
 	if err != nil {
 		return nil, err
@@ -60,6 +63,13 @@ func NewMetrics(provider metric.MeterProvider, opts ...MetricsOption) (*Metrics,
 
 	m.failed, err = meter.Int64Counter("queuer.messages.failed",
 		metric.WithDescription("Total number of messages that failed processing"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	m.settle, err = meter.Int64Counter("queuer.messages.settle_failed",
+		metric.WithDescription("Total number of failed ack, nack, visibility change and lease extension calls"),
 	)
 	if err != nil {
 		return nil, err
@@ -88,7 +98,7 @@ func (m *Metrics) IncMessagesReceived(count int) {
 	m.received.Add(context.Background(), int64(count), metric.WithAttributes(m.attrs...))
 }
 
-// IncMessagesProcessed records that a message was successfully processed.
+// IncMessagesProcessed records that a message was processed and acknowledged.
 func (m *Metrics) IncMessagesProcessed() {
 	m.processed.Add(context.Background(), 1, metric.WithAttributes(m.attrs...))
 }
@@ -97,6 +107,13 @@ func (m *Metrics) IncMessagesProcessed() {
 func (m *Metrics) IncMessagesFailed(action queuer.ErrorAction) {
 	attrs := append([]attribute.KeyValue{attribute.String("action", action.String())}, m.attrs...)
 	m.failed.Add(context.Background(), 1, metric.WithAttributes(attrs...))
+}
+
+// IncSettleFailed records a failed settle call, labeled by operation
+// (one of the queuer.Settle* constants).
+func (m *Metrics) IncSettleFailed(op string) {
+	attrs := append([]attribute.KeyValue{attribute.String("operation", op)}, m.attrs...)
+	m.settle.Add(context.Background(), 1, metric.WithAttributes(attrs...))
 }
 
 // ObserveProcessingDuration records the time taken to process a message.
