@@ -1,5 +1,7 @@
 package otel
 
+import "go.opentelemetry.io/otel/attribute"
+
 // MetricsOption configures a Metrics instance.
 type MetricsOption func(*Metrics)
 
@@ -14,5 +16,13 @@ func WithMeterName(name string) MetricsOption {
 func WithQueueLabel(url string) MetricsOption {
 	return func(m *Metrics) {
 		m.queueURL = url
+	}
+}
+
+// WithAttributes adds constant attributes, such as the queue or service
+// name, to every recorded metric.
+func WithAttributes(attrs ...attribute.KeyValue) MetricsOption {
+	return func(m *Metrics) {
+		m.extra = append(m.extra, attrs...)
 	}
 }

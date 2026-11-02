@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -15,137 +14,136 @@ import (
 	otelpkg "github.com/AlfonsoCampodonico/queuer/otel"
 )
 
-func setupTestTracer(t *testing.T) (*otelpkg.Tracer, *tracetest.InMemoryExporter) {
-	t.Helper()
+func newProvider() (*sdktrace.TracerProvider, *tracetest.InMemoryExporter) {
 	exporter := tracetest.NewInMemoryExporter()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
-	tracer := otelpkg.NewTracer(provider, otelpkg.WithTracerQueueLabel("test-queue"))
-	return tracer, exporter
+	return sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)), exporter
 }
 
-func TestTracer_Start_Success(t *testing.T) {
-	tr, exporter := setupTestTracer(t)
+func attrMap(s tracetest.SpanStub) map[string]any {
+	m := make(map[string]any)
+	for _, kv := range s.Attributes {
+		m[string(kv.Key)] = kv.Value.AsInterface()
+	}
+	return m
+}
 
-	msg := &queuer.Message{ID: "msg-1", Body: "hello", Attributes: map[string]string{}}
-	ctx, end := tr.Start(context.Background(), msg)
+func TestTracer_SuccessSpan(t *testing.T) {
+	provider, exporter := newProvider()
+	tr := otelpkg.NewTracer(provider)
+
+	msg := &queuer.Message{ID: "m1", Body: []byte("hello"), System: "gcp_pubsub", Queue: "orders-sub", ReceiveCount: 3}
+	_, end := tr.Start(context.Background(), msg)
 	end(nil)
-
-	_ = ctx // span is in the context
 
 	spans := exporter.GetSpans()
 	if len(spans) != 1 {
 		t.Fatalf("got %d spans, want 1", len(spans))
 	}
-
-	span := spans[0]
-	if span.Name != "queuer.process" {
-		t.Errorf("span name = %q, want %q", span.Name, "queuer.process")
+	s := spans[0]
+	if s.Name != "process orders-sub" || s.SpanKind != trace.SpanKindConsumer {
+		t.Errorf("name=%q kind=%v", s.Name, s.SpanKind)
 	}
-	if span.SpanKind != trace.SpanKindConsumer {
-		t.Errorf("span kind = %v, want Consumer", span.SpanKind)
+	if s.Status.Code != codes.Unset {
+		t.Errorf("status = %v, want Unset on success", s.Status.Code)
 	}
-	if span.Status.Code != codes.Ok {
-		t.Errorf("span status = %v, want Ok", span.Status.Code)
+	attrs := attrMap(s)
+	want := map[string]any{
+		"messaging.system":                 "gcp_pubsub",
+		"messaging.destination.name":       "orders-sub",
+		"messaging.message.id":             "m1",
+		"messaging.operation.type":         "process",
+		"messaging.message.delivery_count": int64(3),
+		"messaging.message.body.size":      int64(5),
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("%s = %v, want %v", k, attrs[k], v)
+		}
 	}
 }
 
-func TestTracer_Start_Error(t *testing.T) {
-	tr, exporter := setupTestTracer(t)
-
-	msg := &queuer.Message{ID: "msg-2", Body: "bad", Attributes: map[string]string{}}
-	_, end := tr.Start(context.Background(), msg)
+func TestTracer_ErrorSpan(t *testing.T) {
+	provider, exporter := newProvider()
+	_, end := otelpkg.NewTracer(provider).Start(context.Background(), &queuer.Message{ID: "m2"})
 	end(errors.New("handler failed"))
 
-	spans := exporter.GetSpans()
-	if len(spans) != 1 {
-		t.Fatalf("got %d spans, want 1", len(spans))
+	s := exporter.GetSpans()[0]
+	if s.Status.Code != codes.Error || len(s.Events) == 0 {
+		t.Errorf("status=%v events=%d, want Error with an exception event", s.Status.Code, len(s.Events))
 	}
-
-	span := spans[0]
-	if span.Status.Code != codes.Error {
-		t.Errorf("span status = %v, want Error", span.Status.Code)
+	if s.Name != "process" {
+		t.Errorf("name = %q, want %q without a queue", s.Name, "process")
 	}
-	if len(span.Events) == 0 {
-		t.Error("expected error event recorded on span")
+	if _, ok := attrMap(s)["messaging.system"]; ok {
+		t.Error("messaging.system set although Message.System is empty")
 	}
 }
 
-func TestTracer_Start_PropagatesParentContext(t *testing.T) {
-	tr, exporter := setupTestTracer(t)
+func TestPublisher_PropagatesToConsumer(t *testing.T) {
+	provider, exporter := newProvider()
 
-	// Create a parent span to generate a valid trace context
-	parentProvider := sdktrace.NewTracerProvider()
-	parentTracer := parentProvider.Tracer("test")
-	parentCtx, parentSpan := parentTracer.Start(context.Background(), "parent")
-	parentSpanCtx := parentSpan.SpanContext()
-	parentSpan.End()
+	var published *queuer.Message
+	inner := describedPublisher{fn: func(_ context.Context, msg *queuer.Message) (string, error) {
+		published = msg
+		return "id-1", nil
+	}}
+	pub := otelpkg.NewPublisher(inner, provider)
 
-	// Inject trace context into message attributes (simulating a producer)
-	attrs := map[string]string{}
-	propagator := propagation.TraceContext{}
-	propagator.Inject(parentCtx, propagation.MapCarrier(attrs))
+	original := &queuer.Message{Body: []byte("x"), Attributes: map[string]string{"k": "v"}}
+	if _, err := pub.Publish(context.Background(), original); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := original.Attributes["traceparent"]; ok {
+		t.Error("Publish modified the caller's attributes")
+	}
+	if published.Attributes["traceparent"] == "" || published.Attributes["k"] != "v" {
+		t.Fatalf("published attributes = %v", published.Attributes)
+	}
 
-	msg := &queuer.Message{ID: "msg-3", Body: "child", Attributes: attrs}
-	_, end := tr.Start(context.Background(), msg)
+	// The consumer side continues the producer's trace.
+	received := &queuer.Message{ID: "id-1", Attributes: published.Attributes, System: "aws_sqs", Queue: "orders"}
+	_, end := otelpkg.NewTracer(provider).Start(context.Background(), received)
 	end(nil)
 
 	spans := exporter.GetSpans()
-	if len(spans) != 1 {
-		t.Fatalf("got %d spans, want 1", len(spans))
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans, want 2", len(spans))
 	}
-
-	// The child span should have the parent's trace ID
-	childSpan := spans[0]
-	if childSpan.SpanContext.TraceID() != parentSpanCtx.TraceID() {
-		t.Errorf("child trace ID = %s, want %s", childSpan.SpanContext.TraceID(), parentSpanCtx.TraceID())
+	producer, consumer := spans[0], spans[1]
+	if producer.Name != "send orders" || producer.SpanKind != trace.SpanKindProducer {
+		t.Errorf("producer name=%q kind=%v", producer.Name, producer.SpanKind)
 	}
-}
-
-func TestTracer_Start_Attributes(t *testing.T) {
-	tr, exporter := setupTestTracer(t)
-
-	msg := &queuer.Message{
-		ID:           "msg-4",
-		Body:         "test",
-		ReceiveCount: 3,
-		Attributes:   map[string]string{},
+	if attrMap(producer)["messaging.message.id"] != "id-1" || attrMap(producer)["messaging.system"] != "aws_sqs" {
+		t.Errorf("producer attributes = %v", attrMap(producer))
 	}
-	_, end := tr.Start(context.Background(), msg)
-	end(nil)
-
-	spans := exporter.GetSpans()
-	if len(spans) != 1 {
-		t.Fatalf("got %d spans, want 1", len(spans))
+	if consumer.SpanContext.TraceID() != producer.SpanContext.TraceID() {
+		t.Error("consumer span is not in the producer's trace")
 	}
-
-	attrMap := make(map[string]interface{})
-	for _, attr := range spans[0].Attributes {
-		attrMap[string(attr.Key)] = attr.Value.AsInterface()
-	}
-
-	if attrMap["messaging.message.id"] != "msg-4" {
-		t.Errorf("message.id = %v, want msg-4", attrMap["messaging.message.id"])
-	}
-	if attrMap["messaging.system"] != "aws_sqs" {
-		t.Errorf("system = %v, want aws_sqs", attrMap["messaging.system"])
-	}
-	if attrMap["messaging.destination.name"] != "test-queue" {
-		t.Errorf("destination = %v, want test-queue", attrMap["messaging.destination.name"])
-	}
-	if attrMap["messaging.message.receive_count"] != int64(3) {
-		t.Errorf("receive_count = %v, want 3", attrMap["messaging.message.receive_count"])
+	if consumer.Parent.SpanID() != producer.SpanContext.SpanID() {
+		t.Error("consumer span is not a child of the producer span")
 	}
 }
 
-func TestTracer_Start_NilAttributes(t *testing.T) {
-	tr, exporter := setupTestTracer(t)
-
-	msg := &queuer.Message{ID: "msg-5", Body: "no-attrs"}
-	_, end := tr.Start(context.Background(), msg)
-	end(nil)
-
-	spans := exporter.GetSpans()
-	if len(spans) != 1 {
-		t.Fatalf("got %d spans, want 1", len(spans))
+func TestPublisher_Error(t *testing.T) {
+	provider, exporter := newProvider()
+	want := errors.New("throttled")
+	pub := otelpkg.NewPublisher(queuer.PublisherFunc(func(context.Context, *queuer.Message) (string, error) {
+		return "", want
+	}), provider)
+	if _, err := pub.Publish(context.Background(), &queuer.Message{}); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want %v", err, want)
+	}
+	if s := exporter.GetSpans()[0]; s.Status.Code != codes.Error || s.Name != "send" {
+		t.Errorf("name=%q status=%v", s.Name, s.Status.Code)
 	}
 }
+
+type describedPublisher struct {
+	fn func(context.Context, *queuer.Message) (string, error)
+}
+
+func (d describedPublisher) Publish(ctx context.Context, msg *queuer.Message) (string, error) {
+	return d.fn(ctx, msg)
+}
+func (describedPublisher) MessagingSystem() string { return "aws_sqs" }
+func (describedPublisher) DestinationName() string { return "orders" }
